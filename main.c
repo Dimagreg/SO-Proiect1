@@ -6,6 +6,18 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
+
+#define MAX_CHR_PATH 256
+
+struct file
+{
+    char filepath[MAX_CHR_PATH];
+    struct stat st_stat;
+};
+
+struct file *st_file;
+int file_count = 0;
 
 char *separator()
 {
@@ -16,10 +28,59 @@ char *separator()
 #endif
 }
 
-
-void rec_readdir()
+void rec_readdir(DIR *dir, char *filepath)
 {
+    struct dirent *st_dirent = readdir(dir);
 
+    //read each entry of the directory in st_dirent
+    while (st_dirent)
+    {
+        struct stat st_stat;
+        char filename[MAX_CHR_PATH];
+        
+        sprintf(filename, "%s%s%s", filepath, separator(), st_dirent->d_name);
+
+        printf("filename=%s\n", filename);            
+
+        if (lstat(filename, &st_stat) != 0)
+        {
+            perror(NULL);
+            exit(-1);
+        }    
+
+        //save file in st_file
+        if (!(st_file = realloc(st_file, (file_count + 1) * sizeof(struct file))))
+        {
+            perror(NULL);
+            exit(-1);
+        }
+        
+        strcpy(st_file[file_count].filepath, filename);
+        
+        st_file[file_count].st_stat = st_stat;
+
+        file_count++;
+
+        //check if file is directory
+        if (S_ISDIR(st_stat.st_mode))
+        {
+            //check if not . and ..
+            if (strcmp(st_dirent->d_name, ".") != 0 && strcmp(st_dirent->d_name, "..") != 0)
+            {
+                DIR *inputdir = opendir(filename);
+
+                rec_readdir(inputdir, filename);
+            } 
+        }
+
+        st_dirent = readdir(dir);
+    }
+
+    if (closedir(dir) == -1)
+    {
+        perror(NULL);
+        exit(-1);
+    }
 }
 
 
@@ -41,42 +102,7 @@ int main(int argc, char* argv[]){
         exit(-1);
     }
 
-    struct dirent *currentdir = readdir(inputdir);
-
-    while (currentdir)
-    {
-        char *d_name = currentdir->d_name;
-
-        printf("d_name = %s\n", d_name);
-        
-            struct stat st_stat;
-
-            char filepath[100];
-
-            // filepath = strcat(strcat(inputdirstring, separator()), d_name);
-
-            sprintf(filepath, "%s%s%s", inputdirstring, separator(), d_name);
-
-            printf("filepath=%s\n", filepath);            
-
-            if (lstat(filepath, &st_stat) != 0)
-            {
-                perror(NULL);
-                exit(-1);
-            }    
-
-            printf("st_dev = %ld\n", st_stat.st_dev);
-            printf("st_ino = %ld\n", st_stat.st_ino);
-
-
-        currentdir = readdir(inputdir);
-    }
-
-    if (closedir(inputdir) == -1)
-    {
-        perror(NULL);
-        exit(-1);
-    }
+    rec_readdir(inputdir, inputdirstring);
 
     return 0;   
 }
