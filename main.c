@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <string.h>
 #include <fcntl.h>
+#include <getopt.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -42,7 +43,7 @@ char *separator()
 void writeToFileBinary(char* filename, struct file* st_file, int n) {
 
     // open file in write-only, create if doesnt exist, truncate
-    int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC);
+    int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
 
     if (fd == -1) {
         perror("open error");
@@ -134,9 +135,7 @@ void rec_readdir(DIR *dir, char *filepath)
         struct stat st_stat;
         char filename[MAX_CHR_PATH];
         
-        sprintf(filename, "%s%s%s", filepath, separator(), st_dirent->d_name);
-
-        //printf("filename=%s\n", filename);            
+        sprintf(filename, "%s%s%s", filepath, separator(), st_dirent->d_name);      
 
         if (lstat(filename, &st_stat) != 0)
         {
@@ -272,55 +271,118 @@ void compare_snapshots(struct file *st_file_current, struct file *st_file_src, i
     }
 }
 
-
 int main(int argc, char* argv[]){
 
-    if (argc != 2)
-    {
-        printf("Numar invalid de argumente\n");
-        exit(-1);
+    char array_of_directories[10][MAX_CHR_PATH];
+    int count_of_directories = 0;
+
+    char snapshot_path[MAX_CHR_PATH];
+    int snapshot_path_flag = 0;
+
+    int opt;
+
+    // get program arguments
+    while((opt = getopt(argc, argv, "o:d:")) != -1)  
+    {  
+        switch(opt)  
+        {  
+            case 'o':  
+                // get snapshot location
+                snapshot_path_flag = 1;
+                strcpy(snapshot_path, optarg);
+                break;  
+            case 'd':               
+                // get directory names
+                optind--;
+
+                for( ;optind < argc && *argv[optind] != '-'; optind++){
+                    // exit if count of dir > 10
+                    if (count_of_directories == 10)
+                    {
+                        printf("too many arguments for -d: max 10\n");
+                        exit(-1);
+                    }
+
+                    // insert in array
+                    strcpy(array_of_directories[count_of_directories], argv[optind]);
+
+                    count_of_directories++;
+                }
+                
+                break;
+        }
     }
 
-    // get directory name
-    char *inputdirstring = argv[1];
+    printf("snapshot_path = %s\n", snapshot_path);
 
-    // get directory snapshot file name
-    // starts with a . following directory name -> .[dirname]
-    char snapshot_filename[100] = ".";
-    strcat(snapshot_filename, inputdirstring);
-
-    // open directory
-    DIR *inputdir = opendir(inputdirstring); 
-
-    if (!inputdir)
+    for (int i = 0; i < count_of_directories; i++)
     {
-        perror(NULL);
-        exit(-1);
+        // get directory name
+        char *inputdirstring = array_of_directories[i];
+
+        // get snapshot file name
+        // starts with a . , (optional: folowing snapshot location), following directory name -> .[dirname] or [dirlocation]/.[dirname]
+        char snapshot_filename[MAX_CHR_PATH] = ".";
+
+        // check if flag is 1 -> -o option is specified
+        // [dirlocation]/.[dirname]
+        if (snapshot_path_flag == 1)
+        {
+            char string[MAX_CHR_PATH] = "";
+
+            strcat(string, snapshot_path);
+            strcat(string, separator());
+            strcat(string, ".");
+            strcat(string, inputdirstring);
+
+            strcpy(snapshot_filename, string);
+        } 
+        // .[dirname]
+        else
+        {   
+            strcat(snapshot_filename, inputdirstring);
+        }
+
+        // open directory
+        DIR *inputdir = opendir(inputdirstring); 
+
+        // skip if not directory
+        if (!inputdir)
+        {
+            printf("%s - is not a directory\n", inputdirstring);
+            continue;
+        }
+
+        // read current directory structure
+        rec_readdir(inputdir, inputdirstring);
+
+        // read snapshot file if exists
+        st_file_src = readFromFileBinary(snapshot_filename);
+
+        // no snapshot file -> nothing to compare, create new snapshot
+        if (st_file_src == NULL)
+        {
+            writeToFileBinary(snapshot_filename, st_file_current, st_file_current_count);
+        }
+        // compare snapshots
+        else
+        {
+            compare_snapshots(st_file_current, st_file_src, st_file_current_count, st_file_src_count);
+
+            //write new version
+            writeToFileBinary(snapshot_filename, st_file_current, st_file_current_count);
+        }
+
+        //free memory
+        free(st_file_current);
+        free(st_file_src);
+
+        st_file_current = NULL;
+        st_file_src = NULL;
+
+        st_file_current_count = 0;
+        st_file_src_count = 0;
     }
-
-    // read current directory structure
-    rec_readdir(inputdir, inputdirstring);
-
-    // read snapshot file if exists
-    st_file_src = readFromFileBinary(snapshot_filename);
-
-    // no snapshot file -> nothing to compare, create new snapshot
-    if (st_file_src == NULL)
-    {
-        writeToFileBinary(snapshot_filename, st_file_current, st_file_current_count);
-    }
-    // compare snapshots
-    else
-    {
-        compare_snapshots(st_file_current, st_file_src, st_file_current_count, st_file_src_count);
-
-        //write new version
-        writeToFileBinary(snapshot_filename, st_file_current, st_file_current_count);
-    }
-
-    //free memory
-    free(st_file_current);
-    free(st_file_src);
 
     return 0;   
 }
