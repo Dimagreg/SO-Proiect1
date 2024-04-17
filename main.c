@@ -12,24 +12,17 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/wait.h>
 
 #define MAX_CHR_PATH 256
+
+int verbose_option = 0;
 
 struct file
 {
     char filepath[MAX_CHR_PATH];
     struct stat st_stat;
 };
-
-//st_file of current directory state
-struct file *st_file_current;
-
-//st_file of snapshot
-struct file *st_file_src;
-
-//elements count
-int st_file_current_count = 0;
-int st_file_src_count = 0;
 
 char *separator()
 {
@@ -40,7 +33,7 @@ char *separator()
 #endif
 }
 
-void writeToFileBinary(char* filename, struct file* st_file, int n) {
+void writeToFileBinary(char* filename, struct file **st_file_current, int n) {
 
     // open file in write-only, create if doesnt exist, truncate
     int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
@@ -50,7 +43,7 @@ void writeToFileBinary(char* filename, struct file* st_file, int n) {
         exit(-1);
     }
 
-    ssize_t bytes_written = write(fd, st_file, n * sizeof(struct file));
+    ssize_t bytes_written = write(fd, *st_file_current, n * sizeof(struct file));
 
     if (bytes_written == -1) {
         perror("write error");
@@ -66,7 +59,7 @@ void writeToFileBinary(char* filename, struct file* st_file, int n) {
     //printf("Snapshot created successfully\n");
 }
 
-struct file* readFromFileBinary(char* filename) {
+struct file* readFromFileBinary(int *st_file_src_count, char* filename) {
     // open with read only
     int fd = open(filename, O_RDONLY);
 
@@ -95,9 +88,9 @@ struct file* readFromFileBinary(char* filename) {
     }
 
     // number of elements of directory
-    st_file_src_count = file_size / sizeof(struct file);
+    *st_file_src_count = file_size / sizeof(struct file);
 
-    struct file* st_file = (struct file*) malloc(st_file_src_count * sizeof(struct file));
+    struct file* st_file = (struct file*) malloc(*st_file_src_count * sizeof(struct file));
     if (st_file == NULL) {
         perror("malloc error");
         close(fd);
@@ -105,7 +98,7 @@ struct file* readFromFileBinary(char* filename) {
         exit(-1);
     }
 
-    ssize_t bytes_read = read(fd, st_file, st_file_src_count * sizeof(struct file));
+    ssize_t bytes_read = read(fd, st_file, *st_file_src_count * sizeof(struct file));
     if (bytes_read == -1) {
         perror("read error");
         free(st_file);
@@ -125,7 +118,7 @@ struct file* readFromFileBinary(char* filename) {
     return st_file;
 }
 
-void rec_readdir(DIR *dir, char *filepath)
+void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR *dir, char *filepath)
 {
     struct dirent *st_dirent = readdir(dir);
 
@@ -145,19 +138,19 @@ void rec_readdir(DIR *dir, char *filepath)
         }    
 
         //save file in st_file
-        if (!(st_file_current = realloc(st_file_current, (st_file_current_count + 1) * sizeof(struct file))))
+        if (!(*st_file_current = realloc(*st_file_current, (*st_file_current_count + 1) * sizeof(struct file))))
         {
-            perror(NULL);
+            perror("rec_readdir");
             closedir(dir);
-            free(st_file_current);
+            free(*st_file_current);
             exit(-1);
         }
         
-        strcpy(st_file_current[st_file_current_count].filepath, filename);
+        strcpy((*st_file_current)[*st_file_current_count].filepath, filename);
         
-        st_file_current[st_file_current_count].st_stat = st_stat;
+        (*st_file_current)[*st_file_current_count].st_stat = st_stat;
 
-        st_file_current_count++;
+        (*st_file_current_count)++;
 
         //check if file is directory
         if (S_ISDIR(st_stat.st_mode))
@@ -167,7 +160,7 @@ void rec_readdir(DIR *dir, char *filepath)
             {
                 DIR *inputdir = opendir(filename);
 
-                rec_readdir(inputdir, filename);
+                rec_readdir(st_file_current_count, st_file_current, inputdir, filename);
             } 
         }
 
@@ -176,13 +169,13 @@ void rec_readdir(DIR *dir, char *filepath)
 
     if (closedir(dir) == -1)
     {
-        perror(NULL);
+        perror("closedir");
         free(st_file_current);
         exit(-1);
     }
 }
 
-void compare_snapshots(struct file *st_file_current, struct file *st_file_src, int st_file_current_count, int st_file_current_src)
+void compare_snapshots(struct file *st_file_current, struct file *st_file_src, int st_file_current_count, int st_file_src_count)
 {
     struct stat st_stat_current;
 
@@ -282,10 +275,14 @@ int main(int argc, char* argv[]){
     int opt;
 
     // get program arguments
-    while((opt = getopt(argc, argv, "o:d:")) != -1)  
+    while((opt = getopt(argc, argv, "o:d:v")) != -1)  
     {  
         switch(opt)  
         {  
+            case 'v':
+                //verbose mode on snapshot creation, child exit
+                verbose_option = 1;
+                break;
             case 'o':  
                 // get snapshot location
                 snapshot_path_flag = 1;
@@ -313,10 +310,30 @@ int main(int argc, char* argv[]){
         }
     }
 
-    printf("snapshot_path = %s\n", snapshot_path);
+    pid_t pids[10];
+    int pids_count = 0;
+
+    pid_t pid;
 
     for (int i = 0; i < count_of_directories; i++)
     {
+        if ((pid = fork()) < 0)
+        {
+            perror("fork error");
+            exit(1);
+        }
+        if (pid != 0)
+        {
+            //master code
+            //save pid of slave, continue to next dir
+            pids[pids_count] = pid;
+            pids_count++;
+            continue;
+        }
+
+        //slave code
+        //execute and quit if slave
+
         // get directory name
         char *inputdirstring = array_of_directories[i];
 
@@ -353,16 +370,26 @@ int main(int argc, char* argv[]){
             continue;
         }
 
+        //st_file of current directory state
+        struct file *st_file_current = NULL;
+
+        //st_file of snapshot
+        struct file *st_file_src = NULL;
+
+        //elements count
+        int st_file_current_count = 0;
+        int st_file_src_count = 0;
+
         // read current directory structure
-        rec_readdir(inputdir, inputdirstring);
+        rec_readdir(&st_file_current_count, &st_file_current, inputdir, inputdirstring);
 
         // read snapshot file if exists
-        st_file_src = readFromFileBinary(snapshot_filename);
+        st_file_src = readFromFileBinary(&st_file_src_count, snapshot_filename);
 
         // no snapshot file -> nothing to compare, create new snapshot
         if (st_file_src == NULL)
         {
-            writeToFileBinary(snapshot_filename, st_file_current, st_file_current_count);
+            writeToFileBinary(snapshot_filename, &st_file_current, st_file_current_count);
         }
         // compare snapshots
         else
@@ -370,7 +397,12 @@ int main(int argc, char* argv[]){
             compare_snapshots(st_file_current, st_file_src, st_file_current_count, st_file_src_count);
 
             //write new version
-            writeToFileBinary(snapshot_filename, st_file_current, st_file_current_count);
+            writeToFileBinary(snapshot_filename, &st_file_current, st_file_current_count);
+        }
+
+        if (verbose_option)
+        {
+            printf("Snapshot for directory %s created succesfully.\n", inputdirstring);
         }
 
         //free memory
@@ -382,6 +414,24 @@ int main(int argc, char* argv[]){
 
         st_file_current_count = 0;
         st_file_src_count = 0;
+
+        break;
+    }
+
+    //master -> wait for slaves
+    if (pid != 0)
+    {
+        for (int i = 0; i < pids_count; i++)
+        {
+            int status;
+            
+            waitpid(pids[i], &status, WNOHANG);
+
+            if (verbose_option)
+            {
+                printf("Child process %d terminated with PID %d and exit code %d\n", i, pids[i], status);
+            }
+        }
     }
 
     return 0;   
