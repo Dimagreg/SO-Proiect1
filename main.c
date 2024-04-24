@@ -17,6 +17,7 @@
 #define MAX_CHR_PATH 256
 
 int verbose_option = 0;
+char safe_directory_option[MAX_CHR_PATH];
 
 struct file
 {
@@ -137,21 +138,64 @@ void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR 
             exit(-1);
         }    
 
-        //save file in st_file
-        if (!(*st_file_current = realloc(*st_file_current, (*st_file_current_count + 1) * sizeof(struct file))))
+        //check file for null permissions amd execute script to check for malware
+        if ((st_stat.st_mode & S_IRWXU) == 0 &&
+        (st_stat.st_mode & S_IRWXG) == 0 &&
+        (st_stat.st_mode & S_IRWXO) == 0)
         {
-            perror("rec_readdir");
-            closedir(dir);
-            free(*st_file_current);
-            exit(-1);
+            if (verbose_option)
+            {
+                printf("The file %s has no permissions.\n", filename);
+            }
+
+            pid_t pid;
+
+            if ((pid = fork()) < 0)
+            {
+                perror("fork error");
+                exit(1);
+            }
+            if (pid == 0)
+            {
+                //slave code
+
+                char *args[] = {"./verify_malicious.sh", filename, safe_directory_option};
+                execvp(args[0], args);
+
+                //if reached exec has failed
+                printf("Exec Failed.\n");
+
+            }
+            //master code
+
+            int status;
+            
+            waitpid(pid, &status, WNOHANG);
+
+            if (verbose_option)
+            {
+                printf("PID %d terminated with exit code %d\n", pid, status);
+            }
+        }
+
+        else
+        {
+            //save file in st_file
+            if (!(*st_file_current = realloc(*st_file_current, (*st_file_current_count + 1) * sizeof(struct file))))
+            {
+                perror("rec_readdir");
+                closedir(dir);
+                free(*st_file_current);
+                exit(-1);
+            }
+            
+            strcpy((*st_file_current)[*st_file_current_count].filepath, filename);
+            
+            (*st_file_current)[*st_file_current_count].st_stat = st_stat;
+
+            (*st_file_current_count)++;
         }
         
-        strcpy((*st_file_current)[*st_file_current_count].filepath, filename);
-        
-        (*st_file_current)[*st_file_current_count].st_stat = st_stat;
-
-        (*st_file_current_count)++;
-
         //check if file is directory
         if (S_ISDIR(st_stat.st_mode))
         {
@@ -275,7 +319,7 @@ int main(int argc, char* argv[]){
     int opt;
 
     // get program arguments
-    while((opt = getopt(argc, argv, "o:d:v")) != -1)  
+    while((opt = getopt(argc, argv, "o:d:s:v")) != -1)  
     {  
         switch(opt)  
         {  
@@ -283,6 +327,9 @@ int main(int argc, char* argv[]){
                 //verbose mode on snapshot creation, child exit
                 verbose_option = 1;
                 break;
+            case 's':
+                //safe directory for malicious files
+                strcpy(safe_directory_option, optarg);
             case 'o':  
                 // get snapshot location
                 snapshot_path_flag = 1;
