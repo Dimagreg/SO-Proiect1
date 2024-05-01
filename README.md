@@ -14,7 +14,7 @@ Code processes maximum of 10 directories at a time.
 # Options
 * -o output directory of snapshots (if not set, default is working directory)
 * -s safe directory where malicious files are contained
-* -d directories to be captured (should be put last with directories)
+* -d directories to be captured (should be put as last argument and do not put "/" at end)
 * -v verbose mode for snapshot creations and forks management
 
 # Run

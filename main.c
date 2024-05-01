@@ -17,7 +17,7 @@
 #define MAX_CHR_PATH 256
 
 int verbose_option = 0;
-char safe_directory_option[MAX_CHR_PATH];
+char safe_directory_option[MAX_CHR_PATH] = "/"; // "/" - default safe directory if not set
 
 struct file
 {
@@ -119,7 +119,7 @@ struct file* readFromFileBinary(int *st_file_src_count, char* filename) {
     return st_file;
 }
 
-void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR *dir, char *filepath)
+void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR *dir, char *filepath, int *malicious)
 {
     struct dirent *st_dirent = readdir(dir);
 
@@ -149,28 +149,75 @@ void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR 
             }
 
             pid_t pid;
+            char exec_output_string[256];
+            int pfd[2];
+
+            if (pipe(pfd) < 0)
+            {
+                perror("pipe error\n");
+                exit(1);
+            }
 
             if ((pid = fork()) < 0)
             {
-                perror("fork error");
+                perror("fork error\n");
                 exit(1);
             }
             if (pid == 0)
             {
                 //slave code
+                close(pfd[0]); //close read pipe -> writes in pipe
+                
+                if (dup2(pfd[1], STDOUT_FILENO) == -1) {
+                    perror("dup2");
+                    exit(1);
+                }
 
-                char *args[] = {"./verify_malicious.sh", filename, safe_directory_option};
+                char *args[] = {"./verify_malicious.sh", filename, NULL};
                 execvp(args[0], args);
 
                 //if reached exec has failed
                 printf("Exec Failed.\n");
-
+                exit(1);
             }
             //master code
 
+            close(pfd[1]); //close write pipe -> reads from pipe
+
+            FILE *stream = fdopen(pfd[0], "r");
+
+            fscanf(stream, "%s", exec_output_string);
+            
+            close(pfd[0]); /* la sfarsit inchide si capatul utilizat */
+
             int status;
             
-            waitpid(pid, &status, WNOHANG);
+            waitpid(pid, &status, WUNTRACED);
+
+            printf("exec_output_string = %s\n", exec_output_string);
+
+            // check exec results -> "SAFE" - do nothing, [FILENAME] - move to safe directory
+            if (strcmp(exec_output_string, "SAFE") != 0)
+            {
+                (*malicious)++;
+
+                printf("malicious = %d\n", *malicious);
+
+                //check if safe directory ends in '/', if not add one
+                if (safe_directory_option[strlen(safe_directory_option) - 1] != separator()[0])
+                {
+                    strcat(safe_directory_option, separator());
+                }
+
+                strcat(safe_directory_option, exec_output_string);
+
+                //move file to safe directory
+                if (rename(filename, safe_directory_option) < 0)
+                {
+                    perror("rename error\n");
+                    exit(1);
+                }
+            }
 
             if (verbose_option)
             {
@@ -204,7 +251,7 @@ void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR 
             {
                 DIR *inputdir = opendir(filename);
 
-                rec_readdir(st_file_current_count, st_file_current, inputdir, filename);
+                rec_readdir(st_file_current_count, st_file_current, inputdir, filename, malicious);
             } 
         }
 
@@ -357,7 +404,11 @@ int main(int argc, char* argv[]){
         }
     }
 
-    pid_t pids[10];
+    struct pids{
+        pid_t pid;
+        int malicious_files;
+    } pids[10];
+
     int pids_count = 0;
 
     pid_t pid;
@@ -373,7 +424,7 @@ int main(int argc, char* argv[]){
         {
             //master code
             //save pid of slave, continue to next dir
-            pids[pids_count] = pid;
+            pids[pids_count].pid = pid;
             pids_count++;
             continue;
         }
@@ -428,7 +479,7 @@ int main(int argc, char* argv[]){
         int st_file_src_count = 0;
 
         // read current directory structure
-        rec_readdir(&st_file_current_count, &st_file_current, inputdir, inputdirstring);
+        rec_readdir(&st_file_current_count, &st_file_current, inputdir, inputdirstring, &pids[pids_count].malicious_files);
 
         // read snapshot file if exists
         st_file_src = readFromFileBinary(&st_file_src_count, snapshot_filename);
@@ -452,6 +503,8 @@ int main(int argc, char* argv[]){
             printf("Snapshot for directory %s created succesfully.\n", inputdirstring);
         }
 
+        printf("rec pids[%d].malicious = %d\n", pids_count, pids[pids_count].malicious_files);
+
         //free memory
         free(st_file_current);
         free(st_file_src);
@@ -462,7 +515,7 @@ int main(int argc, char* argv[]){
         st_file_current_count = 0;
         st_file_src_count = 0;
 
-        break;
+        exit(0);
     }
 
     //master -> wait for slaves
@@ -471,12 +524,25 @@ int main(int argc, char* argv[]){
         for (int i = 0; i < pids_count; i++)
         {
             int status;
+
+            printf("malicious[%d] = %d\n", i, pids[i].malicious_files);
             
-            waitpid(pids[i], &status, WNOHANG);
+            waitpid(pids[i].pid, &status, WUNTRACED);   
+
+            printf("malicious[%d] = %d\n", i, pids[i].malicious_files);
+
+            printf("pids_count = %d\n", pids_count);
+
+            int es = 0;
+
+            if (WIFEXITED(status)) 
+            {
+                es = WEXITSTATUS(status);
+            }
 
             if (verbose_option)
             {
-                printf("Child process %d terminated with PID %d and exit code %d\n", i, pids[i], status);
+                printf("Child process %d terminated with PID %d and exit code %d. Found %d malicious files\n", i, pids[i].pid, es, pids[i].malicious_files);
             }
         }
     }
