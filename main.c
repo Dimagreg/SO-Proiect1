@@ -1,5 +1,5 @@
-//MAKE SURE TO RUN IT ONCE TO CREATE A SNAPSHOT FILE
-//THEN IT WILL START TO COMPARE IT TO OLDER SNAPSHOT ON MODIFIED DIRECTORY
+// GRIGORI DMITRII
+// 09-05-24
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,8 +16,11 @@
 
 #define MAX_CHR_PATH 256
 
+// -v option value
 int verbose_option = 0;
-char safe_directory_option[MAX_CHR_PATH] = "/"; // "/" - default safe directory if not set
+
+// -s option value
+char safe_directory_option[MAX_CHR_PATH];
 
 struct file
 {
@@ -34,111 +37,130 @@ char *separator()
 #endif
 }
 
-void writeToFileBinary(char* filename, struct file **st_file_current, int n) {
+/* Creates a new snapshot binary file with [n] amount of [struct file] elements*/
+void writeToFileBinary(char* filename, struct file **st_file_current, int n) 
+{
 
     // open file in write-only, create if doesnt exist, truncate
     int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
 
-    if (fd == -1) {
+    if (fd == -1)
+    {
         perror("open error");
-        exit(-1);
+        exit(1);
     }
 
     ssize_t bytes_written = write(fd, *st_file_current, n * sizeof(struct file));
 
-    if (bytes_written == -1) {
+    if (bytes_written == -1)
+    {
         perror("write error");
         close(fd);
-        exit(-1);
+        exit(1);
     }
 
-    if (close(fd) == -1) {
+    if (close(fd) == -1)
+    {
         perror("close error");
-        exit(-1);
+        exit(1);
     }
-
-    //printf("Snapshot created successfully\n");
 }
 
-struct file* readFromFileBinary(int *st_file_src_count, char* filename) {
+/* Reads from snapshot binary file*/
+struct file* readFromFileBinary(int *st_file_src_count, char* filename)
+{
     // open with read only
     int fd = open(filename, O_RDONLY);
 
     // return NULL if file doesn't exist
-    if (fd == -1) {
-
+    if (fd == -1) 
+    {
         return NULL;
     }
 
     // get file size
     off_t file_size = lseek(fd, 0, SEEK_END);
-    if (file_size == -1) {
+    if (file_size == -1) 
+    {
         perror("lseek error");
         close(fd);
         
-        exit(-1);
+        exit(1);
     }
 
     // return to start
     off_t offset = lseek(fd, 0, SEEK_SET);
-    if (offset == -1) {
+    if (offset == -1) 
+    {
         perror("lseek set error");
         close(fd);
         
-        exit(-1);
+        exit(1);
     }
 
     // number of elements of directory
     *st_file_src_count = file_size / sizeof(struct file);
 
     struct file* st_file = (struct file*) malloc(*st_file_src_count * sizeof(struct file));
-    if (st_file == NULL) {
+    if (st_file == NULL) 
+    {
         perror("malloc error");
         close(fd);
         
-        exit(-1);
+        exit(1);
     }
 
     ssize_t bytes_read = read(fd, st_file, *st_file_src_count * sizeof(struct file));
-    if (bytes_read == -1) {
+    if (bytes_read == -1) 
+    {
         perror("read error");
         free(st_file);
         close(fd);
         
-        exit(-1);
+        exit(1);
     }
 
     // close fd
-    if (close(fd) == -1) {
+    if (close(fd) == -1) 
+    {
         perror("close fd error");
         free(st_file);
 
-        exit(-1);
+        exit(1);
     }
 
     return st_file;
 }
 
+/* Recursive function to read all files from a directory and pass each file 
+ * information to [st_file_current] and verify through a bash script for 
+ * malicious file that will be moved to a safe directory*/
 void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR *dir, char *filepath, int *malicious)
 {
     struct dirent *st_dirent = readdir(dir);
 
-    //read each entry of the directory in st_dirent
+    // read each file of the directory in st_dirent
     while (st_dirent)
     {
         struct stat st_stat;
         char filename[MAX_CHR_PATH];
         
-        sprintf(filename, "%s%s%s", filepath, separator(), st_dirent->d_name);      
+        // get current file path -> filename
+        sprintf(filename, "%s%s%s", filepath, separator(), st_dirent->d_name);     
+
+        // copy global safe directory path to local variable
+        char safe_directory[MAX_CHR_PATH];
+
+        strcpy(safe_directory, safe_directory_option);
 
         if (lstat(filename, &st_stat) != 0)
         {
             perror(NULL);
             closedir(dir);
-            exit(-1);
+            exit(1);
         }    
 
-        //check file for null permissions amd execute script to check for malware
+        // check file for null permissions amd execute script to check for malware
         if ((st_stat.st_mode & S_IRWXU) == 0 &&
         (st_stat.st_mode & S_IRWXG) == 0 &&
         (st_stat.st_mode & S_IRWXO) == 0)
@@ -165,10 +187,11 @@ void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR 
             }
             if (pid == 0)
             {
-                //slave code
-                close(pfd[0]); //close read pipe -> writes in pipe
+                // slave code
+                close(pfd[0]); // close read pipe -> writes in pipe
                 
-                if (dup2(pfd[1], STDOUT_FILENO) == -1) {
+                if (dup2(pfd[1], STDOUT_FILENO) == -1) 
+                {
                     perror("dup2");
                     exit(1);
                 }
@@ -176,16 +199,17 @@ void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR 
                 char *args[] = {"./verify_malicious.sh", filename, NULL};
                 execvp(args[0], args);
 
-                //if reached exec has failed
+                // if reached exec has failed
                 printf("Exec Failed.\n");
                 exit(1);
             }
-            //master code
+            // master code
 
-            close(pfd[1]); //close write pipe -> reads from pipe
+            close(pfd[1]); // close write pipe -> reads from pipe
 
             FILE *stream = fdopen(pfd[0], "r");
 
+            // get char* from FILE* -> exec_output_string
             fscanf(stream, "%s", exec_output_string);
             
             close(pfd[0]); /* la sfarsit inchide si capatul utilizat */
@@ -194,25 +218,22 @@ void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR 
             
             waitpid(pid, &status, WUNTRACED);
 
-            printf("exec_output_string = %s\n", exec_output_string);
-
             // check exec results -> "SAFE" - do nothing, [FILENAME] - move to safe directory
             if (strcmp(exec_output_string, "SAFE") != 0)
             {
+                // amount of malicious files in a directory
                 (*malicious)++;
 
-                printf("malicious = %d\n", *malicious);
-
-                //check if safe directory ends in '/', if not add one
-                if (safe_directory_option[strlen(safe_directory_option) - 1] != separator()[0])
+                // check if safe directory ends in '/', if not -> add one
+                if (safe_directory[strlen(safe_directory) - 1] != separator()[0])
                 {
-                    strcat(safe_directory_option, separator());
+                    strcat(safe_directory, separator());
                 }
 
-                strcat(safe_directory_option, exec_output_string);
-
-                //move file to safe directory
-                if (rename(filename, safe_directory_option) < 0)
+                strcat(safe_directory, exec_output_string);
+                
+                // move file to safe directory
+                if (rename(filename, safe_directory) < 0)
                 {
                     perror("rename error\n");
                     exit(1);
@@ -227,15 +248,16 @@ void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR 
 
         else
         {
-            //save file in st_file
+            // save file in st_file
             if (!(*st_file_current = realloc(*st_file_current, (*st_file_current_count + 1) * sizeof(struct file))))
             {
                 perror("rec_readdir");
                 closedir(dir);
                 free(*st_file_current);
-                exit(-1);
+                exit(1);
             }
             
+            // save file information to st_file_current
             strcpy((*st_file_current)[*st_file_current_count].filepath, filename);
             
             (*st_file_current)[*st_file_current_count].st_stat = st_stat;
@@ -243,10 +265,12 @@ void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR 
             (*st_file_current_count)++;
         }
         
-        //check if file is directory
+        // check if file is directory
         if (S_ISDIR(st_stat.st_mode))
         {
-            //check if not . and ..
+            // every directory in linux has 2 files [.] and [..] which we skip if found
+            // because on every file modification inside a directory affect the size of 
+            // those files and affect the snapshot behaviour
             if (strcmp(st_dirent->d_name, ".") != 0 && strcmp(st_dirent->d_name, "..") != 0)
             {
                 DIR *inputdir = opendir(filename);
@@ -262,10 +286,11 @@ void rec_readdir(int *st_file_current_count, struct file **st_file_current, DIR 
     {
         perror("closedir");
         free(st_file_current);
-        exit(-1);
+        exit(1);
     }
 }
 
+/* Compare saved snapshot stuct in system and current read and print file differences*/
 void compare_snapshots(struct file *st_file_current, struct file *st_file_src, int st_file_current_count, int st_file_src_count)
 {
     struct stat st_stat_current;
@@ -291,7 +316,7 @@ void compare_snapshots(struct file *st_file_current, struct file *st_file_src, i
                     if (lstat(st_file_current[j].filepath, &st_stat_current) != 0)
                     {
                         perror(NULL);
-                        exit(-1);
+                        exit(1);
                     }    
 
                     //st_size differs -> file was modified
@@ -355,8 +380,8 @@ void compare_snapshots(struct file *st_file_current, struct file *st_file_src, i
     }
 }
 
-int main(int argc, char* argv[]){
-
+int main(int argc, char* argv[])
+{
     char array_of_directories[10][MAX_CHR_PATH];
     int count_of_directories = 0;
 
@@ -366,17 +391,18 @@ int main(int argc, char* argv[]){
     int opt;
 
     // get program arguments
-    while((opt = getopt(argc, argv, "o:d:s:v")) != -1)  
+    while((opt = getopt(argc, argv, "vo:d:s:")) != -1)  
     {  
         switch(opt)  
         {  
             case 'v':
-                //verbose mode on snapshot creation, child exit
+                //verbose mode
                 verbose_option = 1;
                 break;
             case 's':
                 //safe directory for malicious files
                 strcpy(safe_directory_option, optarg);
+                break;
             case 'o':  
                 // get snapshot location
                 snapshot_path_flag = 1;
@@ -386,12 +412,21 @@ int main(int argc, char* argv[]){
                 // get directory names
                 optind--;
 
-                for( ;optind < argc && *argv[optind] != '-'; optind++){
+                for( ;optind < argc && *argv[optind] != '-'; optind++)
+                {
                     // exit if count of dir > 10
                     if (count_of_directories == 10)
                     {
                         printf("too many arguments for -d: max 10\n");
-                        exit(-1);
+                        exit(1);
+                    }
+
+                    // directory can be passed as [dir] or [dir/] and its easier to
+                    // delete the separator before processing if found than modify
+                    // current logic
+                    if (argv[optind][strlen(argv[optind]) - 1] == separator()[0])
+                    {
+                        argv[optind][strlen(argv[optind]) - 1] = '\0';
                     }
 
                     // insert in array
@@ -404,7 +439,15 @@ int main(int argc, char* argv[]){
         }
     }
 
-    struct pids{
+    // -s option can't be null
+    if (strcmp(safe_directory_option, "") == 0)
+    {
+        printf("-s option is not set\n");
+        exit(1);
+    }
+
+    struct pids
+    {
         pid_t pid;
         int malicious_files;
     } pids[10];
@@ -498,12 +541,7 @@ int main(int argc, char* argv[]){
             writeToFileBinary(snapshot_filename, &st_file_current, st_file_current_count);
         }
 
-        if (verbose_option)
-        {
-            printf("Snapshot for directory %s created succesfully.\n", inputdirstring);
-        }
-
-        printf("rec pids[%d].malicious = %d\n", pids_count, pids[pids_count].malicious_files);
+        printf("Snapshot for directory %s created succesfully.\n", inputdirstring);
 
         //free memory
         free(st_file_current);
@@ -515,7 +553,8 @@ int main(int argc, char* argv[]){
         st_file_current_count = 0;
         st_file_src_count = 0;
 
-        exit(0);
+        // exit with number of malicious files found
+        exit(pids[pids_count].malicious_files);
     }
 
     //master -> wait for slaves
@@ -524,14 +563,8 @@ int main(int argc, char* argv[]){
         for (int i = 0; i < pids_count; i++)
         {
             int status;
-
-            printf("malicious[%d] = %d\n", i, pids[i].malicious_files);
             
             waitpid(pids[i].pid, &status, WUNTRACED);   
-
-            printf("malicious[%d] = %d\n", i, pids[i].malicious_files);
-
-            printf("pids_count = %d\n", pids_count);
 
             int es = 0;
 
@@ -540,10 +573,7 @@ int main(int argc, char* argv[]){
                 es = WEXITSTATUS(status);
             }
 
-            if (verbose_option)
-            {
-                printf("Child process %d terminated with PID %d and exit code %d. Found %d malicious files\n", i, pids[i].pid, es, pids[i].malicious_files);
-            }
+            printf("Child process %d terminated with PID %d. Found %d malicious files\n", i, pids[i].pid, es);
         }
     }
 
