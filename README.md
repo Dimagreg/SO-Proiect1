@@ -55,7 +55,7 @@ Options 2 and 3 are processed using a bash script **/verify_malicious.sh** insid
 # Run
 On first run no comparisons are made because snapshot file does not exist. Modify some files and run the second time on same directories to see changes.
 
-`gcc -Wall -o prog.x main.c; ./prog.x -v -s [safe_dir] -o [output_directory] -d [dir1] [dir2] ...`
+`gcc -Wall -o prog.x main.c; ./prog.x -v -s [safe_dir] -o [output_dir] -d [dir1] [dir2] ...`
 
 # Windows
 Theoretically the program can be run on windows if unix-like commands and bash files are supported. This can be achieved by downloading unix terminals for windows such as [Cygwin64 Terminal](https://www.cygwin.com) 
